@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Обводка</title>
+<style>
+  :root{
+    --panel: rgba(22,22,24,.82);
+    --line: rgba(255,255,255,.14);
+    --ink: #ECEAE6;
+    --dim: #8A8781;
+    --hot: #E8B84B;
+    --tap: 52px;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:#000;overflow:hidden;
+    font:500 13px/1.2 system-ui,-apple-system,sans-serif;color:var(--ink);
+    overscroll-behavior:none}
+
+  #cam{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;background:#000}
+
+  #stage{position:fixed;inset:0;display:grid;place-items:center;pointer-events:none;overflow:hidden}
+  #art{max-width:100vw;max-height:100vh;transform-origin:center;will-change:transform;
+    opacity:.5;display:none}
+  #art.lines{filter:grayscale(1) contrast(2.4) brightness(1.08)}
+  #art.inv{filter:invert(1) grayscale(1) contrast(2.4)}
+
+  #grab{position:fixed;inset:0;touch-action:none}
+  #grab.locked{pointer-events:none}
+
+  /* панель */
+  #bar{position:fixed;left:0;right:0;bottom:0;padding:10px 12px calc(10px + env(safe-area-inset-bottom));
+    background:var(--panel);backdrop-filter:blur(14px);border-top:1px solid var(--line);
+    display:flex;flex-direction:column;gap:10px;
+    transform:translateY(0);transition:transform .22s ease}
+  #bar.hid{transform:translateY(110%)}
+  @media (prefers-reduced-motion:reduce){#bar{transition:none}}
+
+  .row{display:flex;gap:8px;align-items:center}
+  button{flex:1;min-height:var(--tap);border:1px solid var(--line);border-radius:10px;
+    background:rgba(255,255,255,.05);color:var(--ink);font:inherit;letter-spacing:.02em;
+    display:grid;place-items:center;padding:0 6px}
+  button:active{background:rgba(255,255,255,.14)}
+  button.on{background:var(--hot);border-color:var(--hot);color:#17150F}
+  button:disabled{opacity:.32}
+  button:focus-visible{outline:2px solid var(--hot);outline-offset:2px}
+
+  input[type=range]{flex:1;height:var(--tap);accent-color:var(--hot);background:none}
+  .lbl{width:42px;color:var(--dim);font-variant-numeric:tabular-nums;text-align:right}
+
+  /* язычок, когда панель скрыта */
+  #tab{position:fixed;bottom:calc(8px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);
+    width:96px;height:34px;border-radius:17px;background:var(--panel);border:1px solid var(--line);
+    display:none;place-items:center;color:var(--dim);backdrop-filter:blur(14px)}
+  #tab.show{display:grid}
+
+  /* индикатор блокировки */
+  #pin{position:fixed;top:calc(10px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);
+    padding:6px 14px;border-radius:14px;background:rgba(232,184,75,.9);color:#17150F;
+    display:none;font-size:12px}
+  #pin.show{display:block}
+
+  #err{position:fixed;inset:0;display:none;place-items:center;padding:32px;text-align:center;
+    background:#000;line-height:1.55;color:var(--dim)}
+  #err.show{display:grid}
+  #err b{color:var(--ink);display:block;margin-bottom:8px;font-size:15px}
+  code{color:var(--hot);font-family:ui-monospace,monospace}
+</style>
+</head>
+<body>
+
+<video id="cam" playsinline muted autoplay></video>
+<div id="stage"><img id="art" alt=""></div>
+<div id="grab"></div>
+
+<div id="pin">Зафиксировано</div>
+
+<div id="bar">
+  <div class="row">
+    <input id="op" type="range" min="5" max="100" value="50" aria-label="Прозрачность">
+    <span class="lbl" id="opv">50%</span>
+  </div>
+  <div class="row">
+    <button id="pick">Картинка</button>
+    <button id="lock">Зафиксировать</button>
+    <button id="torch" disabled>Фонарик</button>
+  </div>
+  <div class="row">
+    <button id="lines">Линии</button>
+    <button id="inv">Инверсия</button>
+    <button id="fit">Сброс</button>
+    <button id="hide">Скрыть</button>
+  </div>
+</div>
+
+<div id="tab" role="button" tabindex="0">Панель</div>
+
+<div id="err"></div>
+
+<input id="file" type="file" accept="image/*" hidden>
+
+<script>
+const $ = id => document.getElementById(id);
+const cam=$('cam'), art=$('art'), grab=$('grab'), bar=$('bar'), tab=$('tab'), pin=$('pin');
+
+function fail(html){ $('err').innerHTML = html; $('err').classList.add('show'); }
+
+/* ---------- камера ---------- */
+let track = null;
+
+async function startCam(){
+  if(!navigator.mediaDevices?.getUserMedia){
+    return fail('<b>Браузер не отдаёт камеру</b>Открой страницу в Chrome по <code>https://</code> — по http и через file:// доступа к камере нет.');
+  }
+  try{
+    const s = await navigator.mediaDevices.getUserMedia({
+      video:{ facingMode:{ideal:'environment'}, width:{ideal:1920}, height:{ideal:1080} },
+      audio:false
+    });
+    cam.srcObject = s;
+    track = s.getVideoTracks()[0];
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    $('torch').disabled = !caps.torch;
+  }catch(e){
+    fail('<b>Нет доступа к камере</b>' + e.name + '. Проверь разрешение для сайта в настройках Chrome и что адрес начинается с <code>https://</code>.');
+  }
+}
+startCam();
+
+/* ---------- экран не гаснет ---------- */
+let wake = null;
+async function keepAwake(){
+  try{ wake = await navigator.wakeLock.request('screen'); }catch(e){}
+}
+keepAwake();
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState === 'visible') keepAwake();
+});
+
+/* ---------- трансформация картинки ---------- */
+const T = {x:0, y:0, s:1, r:0};
+const pts = new Map();
+let base = null, locked = false;
+
+const render = ()=> art.style.transform =
+  `translate(${T.x}px,${T.y}px) rotate(${T.r}rad) scale(${T.s})`;
+
+function shape(){
+  const a = [...pts.values()];
+  if(!a.length) return null;
+  if(a.length === 1) return {cx:a[0].x, cy:a[0].y, d:null, ang:null};
+  const [p,q] = a;
+  return {
+    cx:(p.x+q.x)/2, cy:(p.y+q.y)/2,
+    d: Math.hypot(q.x-p.x, q.y-p.y),
+    ang: Math.atan2(q.y-p.y, q.x-p.x)
+  };
+}
+function rebase(){ const s = shape(); base = s ? {s, T:{...T}} : null; }
+
+grab.addEventListener('pointerdown', e=>{
+  grab.setPointerCapture(e.pointerId);
+  pts.set(e.pointerId, {x:e.clientX, y:e.clientY});
+  rebase();
+});
+grab.addEventListener('pointermove', e=>{
+  if(!pts.has(e.pointerId)) return;
+  pts.set(e.pointerId, {x:e.clientX, y:e.clientY});
+  const s = shape();
+  if(!base || !s) return;
+  if(s.d != null && base.s.d) {
+    T.s = Math.min(24, Math.max(.04, base.T.s * (s.d / base.s.d)));
+    T.r = base.T.r + (s.ang - base.s.ang);
+  }
+  T.x = base.T.x + (s.cx - base.s.cx);
+  T.y = base.T.y + (s.cy - base.s.cy);
+  render();
+});
+const drop = e => { pts.delete(e.pointerId); rebase(); };
+grab.addEventListener('pointerup', drop);
+grab.addEventListener('pointercancel', drop);
+
+/* ---------- управление ---------- */
+$('op').addEventListener('input', e=>{
+  art.style.opacity = e.target.value/100;
+  $('opv').textContent = e.target.value + '%';
+});
+
+$('pick').onclick = ()=> $('file').click();
+$('file').onchange = e=>{
+  const f = e.target.files[0];
+  if(!f) return;
+  art.src = URL.createObjectURL(f);
+  art.style.display = 'block';
+  T.x = T.y = T.r = 0; T.s = 1; render();
+};
+
+$('lock').onclick = e=>{
+  locked = !locked;
+  grab.classList.toggle('locked', locked);
+  e.target.classList.toggle('on', locked);
+  e.target.textContent = locked ? 'Разблокировать' : 'Зафиксировать';
+  pin.classList.toggle('show', locked);
+};
+
+$('torch').onclick = async e=>{
+  const on = !e.target.classList.contains('on');
+  try{
+    await track.applyConstraints({advanced:[{torch:on}]});
+    e.target.classList.toggle('on', on);
+  }catch(err){ e.target.disabled = true; }
+};
+
+$('lines').onclick = e=>{
+  art.classList.remove('inv'); $('inv').classList.remove('on');
+  art.classList.toggle('lines');
+  e.target.classList.toggle('on', art.classList.contains('lines'));
+};
+$('inv').onclick = e=>{
+  art.classList.remove('lines'); $('lines').classList.remove('on');
+  art.classList.toggle('inv');
+  e.target.classList.toggle('on', art.classList.contains('inv'));
+};
+
+$('fit').onclick = ()=>{ T.x = T.y = T.r = 0; T.s = 1; render(); };
+
+const show = v =>{ bar.classList.toggle('hid', !v); tab.classList.toggle('show', !v); };
+$('hide').onclick = ()=> show(false);
+tab.onclick = ()=> show(true);
+tab.onkeydown = e=>{ if(e.key === 'Enter' || e.key === ' ') show(true); };
+</script>
+</body>
+</html>
