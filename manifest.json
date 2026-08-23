@@ -1,6 +1,6 @@
 {
-  "name": "Обводка",
-  "short_name": "Обводка",
+  "name": "ARt",
+  "short_name": "ARt",
   "description": "Эскизы поверх камеры для рисования с натуры",
   "start_url": "./",
   "scope": "./",
