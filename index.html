@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#0E0E10" id="tc">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
-<title>ARt</title>
+<title>Обводка</title>
 <style>
   :root[data-theme="dark"]{
     --bg:#0E0E10; --card:#1A1A1D; --ink:#ECEAE6; --dim:#807D77;
@@ -35,6 +35,8 @@
   .ico{width:40px;height:40px;border-radius:12px;background:var(--sunk);
     display:grid;place-items:center;font-size:17px;flex:none}
   .ico:active{background:var(--line)}
+  .ico.wide{width:auto;padding:0 14px;font-size:13px;font-weight:600}
+  .ico.act{background:var(--hot);color:#17150F}
 
   #tabs{display:flex;gap:7px;padding:0 16px 12px}
   #tabs button{padding:8px 15px;border-radius:99px;background:var(--sunk);
@@ -59,6 +61,7 @@
   .badge.d{right:44px}
   .badge.on{background:var(--hot);color:#17150F}
   .badge.d.on{background:var(--ok);color:#0C1F16}
+  .badge.x{left:7px;background:#E24B4A;color:#fff;font-size:15px}
 
   .name{position:absolute;left:0;right:0;bottom:0;padding:16px 9px 7px;font-size:11px;
     color:#fff;background:linear-gradient(transparent,rgba(0,0,0,.78));
@@ -133,7 +136,8 @@
 <!-- ЭКРАН 1: библиотека -->
 <section id="lib" class="screen on">
   <div id="head">
-    <h1>ARt</h1>
+    <h1>Обводка</h1>
+    <button class="ico wide" id="edit">Удалить</button>
     <button class="ico" id="theme" aria-label="Сменить тему">◐</button>
   </div>
   <div id="tabs">
@@ -216,7 +220,7 @@ $('theme').onclick = () =>
   applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
 
 /* ========== БИБЛИОТЕКА ========== */
-let items = [], filter = 'all', urls = [];
+let items = [], filter = 'all', urls = [], editMode = false;
 
 async function thumb(file, max = 420){
   const bmp = await createImageBitmap(file);
@@ -250,20 +254,25 @@ function draw(){
     c.className = 'card' + (it.done ? ' done' : '');
     c.innerHTML =
       `<img src="${u}" alt="">
+       ${editMode ? '<button class="badge x" aria-label="Удалить">✕</button>' : ''}
        <button class="badge d ${it.done?'on':''}" aria-label="Отметить готовым">✓</button>
        <button class="badge f ${it.fav ?'on':''}" aria-label="В избранное">★</button>
        <div class="name">${it.name.replace(/[<>&]/g,'')}</div>`;
 
+    const remove = async () => {
+      if(!confirm(`Удалить «${it.name}»?`)) return;
+      await delSk(it.id);
+      items = items.filter(x => x.id !== it.id);
+      draw(); toast('Удалено');
+    };
+
     c.querySelector('.f').onclick = async e => { e.stopPropagation(); it.fav = !it.fav;  await putSk(it); draw(); };
     c.querySelector('.d').onclick = async e => { e.stopPropagation(); it.done = !it.done; await putSk(it); draw(); };
-    c.onclick = () => openDraw(it);
+    if(editMode) c.querySelector('.x').onclick = e => { e.stopPropagation(); remove(); };
+    else         c.onclick = () => openDraw(it);
 
     let hold;
-    const start = () => hold = setTimeout(async () => {
-      if(confirm(`Удалить «${it.name}»?`)){
-        await delSk(it.id); items = items.filter(x => x.id !== it.id); draw(); toast('Удалено');
-      }
-    }, 550);
+    const start = () => hold = setTimeout(remove, 550);
     const stop = () => clearTimeout(hold);
     c.addEventListener('pointerdown', start);
     ['pointerup','pointerleave','pointercancel','pointermove'].forEach(ev => c.addEventListener(ev, stop));
@@ -280,6 +289,13 @@ $('tabs').onclick = e => {
 };
 
 $('add').onclick = () => $('file').click();
+
+$('edit').onclick = () => {
+  editMode = !editMode;
+  $('edit').textContent = editMode ? 'Готово' : 'Удалить';
+  $('edit').classList.toggle('act', editMode);
+  draw();
+};
 $('file').onchange = async e => {
   const files = [...e.target.files];
   e.target.value = '';
@@ -307,7 +323,8 @@ async function startCam(){
   if(camOn) return;
   try{
     const s = await navigator.mediaDevices.getUserMedia({
-      video:{ facingMode:{ideal:'environment'}, width:{ideal:1920}, height:{ideal:1080} }, audio:false
+      video:{ facingMode:{ideal:'environment'}, width:{ideal:1280}, height:{ideal:720},
+              frameRate:{ideal:24, max:30} }, audio:false
     });
     cam.srcObject = s;
     track = s.getVideoTracks()[0];
@@ -322,10 +339,26 @@ async function startCam(){
   }
 }
 
+function stopCam(){
+  if(cam.srcObject){
+    cam.srcObject.getTracks().forEach(t => t.stop());
+    cam.srcObject = null;
+  }
+  track = null; camOn = false;
+  $('torch').classList.remove('on');
+}
+
 let wake = null;
 const keepAwake = async () => { try{ wake = await navigator.wakeLock.request('screen'); }catch(e){} };
+const dropWake = () => { if(wake){ wake.release().catch(()=>{}); wake = null; } };
+
 document.addEventListener('visibilitychange', () => {
-  if(document.visibilityState === 'visible' && $('draw').classList.contains('on')) keepAwake();
+  const onDraw = $('draw').classList.contains('on');
+  if(document.visibilityState === 'visible'){
+    if(onDraw){ keepAwake(); startCam(); }
+  }else{
+    stopCam(); dropWake();
+  }
 });
 
 function show(id){
@@ -349,7 +382,8 @@ async function openDraw(it){
 
 function closeDraw(){
   show('lib');
-  if(wake){ wake.release().catch(()=>{}); wake = null; }
+  stopCam();
+  dropWake();
   load();
 }
 $('back').onclick = () => history.state?.draw ? history.back() : closeDraw();
